@@ -16,7 +16,7 @@ DESCRIPTION
     writes only the cells values to STDOUT (or the specified output file).
     If sheet names are specified, only these sheets are extracted.
     Otherwise, only the first sheet or, when the output filename contains
-    <SHEET>, all sheets are extracted.
+    <SHEET> as placeholder for the sheet name, all sheets are extracted.
     Sheet names may contain wildcards as in regular expressions, e.g.
     "Project.*" will extract all sheets with names starting with 'Project'.
 
@@ -37,42 +37,45 @@ AUTHOR
     © 2018 Hinrich Ruprecht : usable according to GNU public license
     
 DESC
-my $version="1.0";
+my $version="1.0.1";
 
 # Read Options:
-my $arguments="Usage: $^X $0 [-hv] \n\t[-o OUTFILE] \n\t[-S 'SEPARATOR'] "
+my $usage="Usage: $^X $0 [-hv] \n\t[-o OUTFILE] \n\t[-S 'SEPARATOR'] "
     ."[-D 'DELIMITER'] \n\tODSFILE [SHEET ...]";
 my $verbose=0; my $test=0; my $target=""; my $sep="\t"; my $del='"';
 if ($#ARGV<0 || ($#ARGV==0 && $ARGV[0] eq "")) {
-    print $arguments,"\nArguments (-h or ? for help): ";
+    print $usage,"\nArguments (-h or ? for help): ";
     my $tmp=<STDIN>;
     chomp($tmp) if $tmp;
     exit unless $tmp;
     @ARGV=split(" ",$tmp);
     }
-my $opt;
-while ($#ARGV>=0 && (($opt=shift) eq "" || substr($opt,0,1) eq "-")) {
-    next unless $opt;
-    $verbose++ if $opt=~/v/;
-    $test=1 if $opt=~/t/;
-    if ($opt=~/h/) { print $description,"\n"; exit; }
-    if ($opt=~/([oSD])/) {
-        my $opt=$1; my $val=shift;
+my $par;
+while ($#ARGV>=0 && (($par=shift) eq "" || substr($par,0,1) eq "-")) {
+    next unless $par;
+    $verbose++ if $par=~/v/;
+    $test=1 if $par=~/t/;
+    if ($par=~/h/) { print $description,"\n"; exit; }
+    if ($par=~/([oSD])/) {
+        my $par=$1; my $val=shift;
         $val=$2 if $val=~/^([\"\'])(.*)([\"\'])$/ && $1 eq $3;
-        if ($opt eq "o") { $target=$val; }
-        elsif ($opt eq "S") { $sep=$val; }
-        elsif ($opt eq "D") { $del=$val; }
+        if ($par eq "o") { $target=$val; }
+        elsif ($par eq "S") { $sep=$val; }
+        elsif ($par eq "D") { $del=$val; }
         }
     }
+print STDERR "par=$par\n" if $test>0;
+if ($par eq "?" || $par eq "0") { print $description,"\n"; exit; }
 $verbose++ if $test>0;
-print $0," version ",$version,"\n" if $verbose>0;
-die "Delimiter and Separator must be different\n" if $del eq $sep;
-
 # Parameter(s):
-my $spreadsheetFile = shift;
+my $spreadsheetFile = $par;
+
 die "No spreadsheet file specified\nUse -h for help\n" unless $spreadsheetFile;
 die "File $spreadsheetFile not found\n" if !-e $spreadsheetFile;
 die "No read access to $spreadsheetFile\n" if !-r $spreadsheetFile;
+
+print $0," version ",$version,"\n" if $verbose>0;
+die "Delimiter and Separator must be different\n" if $del eq $sep;
 
 my $tmpFile="tmp.xml";
 
@@ -86,26 +89,32 @@ sub extractSheets {
         $repl{"amp"}='&'; $repl{"lt"}='<'; $repl{"gt"}='>';
         $repl{"apos"}="'"; $repl{"quot"}='"';
     
-    # xOffice files use zip format to store contents:
-    use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
-    my $zip = Archive::Zip->new();
-    if ($zip->read( $spreadsheetFile ) != AZ_OK) {
-        print STDERR "File $spreadsheetFile probably has wrong format.\n",
+    my $XMLfile;
+    if ($spreadsheetFile=~/\.fo.s$/i) # fods/fots? : flat ODF XML spreadsheet
+        { $XMLfile=$spreadsheetFile; }
+    else {
+        # xOffice files use zip format to store contents:
+        use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
+        my $zip = Archive::Zip->new();
+        if ($zip->read( $spreadsheetFile ) != AZ_OK) {
+            print STDERR "File $spreadsheetFile probably has wrong format.\n",
                 "Only Libre/OpenOffice spreadsheet files are supported. ",
                 "Use Libre/OpenOffice to convert to .ods!\n";
-        exit;
+            exit;
+            }
+        if (-e $tmpFile) { 
+            unlink($tmpFile) 
+            || die "Can't remove $tmpFile (used as temporary file)\n$!\n";
+            }
+        $zip->extractMember("content.xml",$tmpFile);
+        if (!-e $tmpFile) 
+            { die "Can't extract content.xml from $spreadsheetFile\n"; }
+        $XMLfile=$tmpFile;
         }
-    if (-e $tmpFile) { 
-        unlink($tmpFile) 
-        || die "Can't remove $tmpFile (used as temporary file)\n$!\n";
-        }
-    $zip->extractMember("content.xml",$tmpFile);
-    if (!-e $tmpFile) 
-        { die "Can't extract content.xml from $spreadsheetFile\n"; }
     
     # Check for XML header and read contents (normallly in 2nd line):
-    open(XML,$tmpFile) 
-        || die "Can't open extracted contents of $spreadsheetFile\n$!\n"; 
+    open(XML,$XMLfile) 
+        || die "Can't open contents of $spreadsheetFile\n$!\n"; 
     my $xmlHeader=<XML>;
     if ($xmlHeader!~/\<\?xml version/) {
         print STDERR "* Header of $spreadsheetFile content is not XML\n";
