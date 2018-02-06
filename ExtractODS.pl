@@ -9,7 +9,7 @@ NAME
     ExtractODS.pl (source)
 
 SYNOPSIS
-    perl ExtractODS.pl [Options] OOSpreadsheetFile [SheetName ...]
+    perl ExtractODS.pl [Options] SpreadsheetFile [SheetName ...]
 
 DESCRIPTION
     The program reads the spreadsheet contents of the given file and
@@ -25,6 +25,8 @@ DESCRIPTION
     Other file formats which use XML (e.g. .xlsx) separate text and structure.
     To extract sheets from Excel file formats, they must first be converted
     to .ods, e.g. with soffice --convert-to ods --headless --norestore ABC.xls
+    If Libre/OpenOffice is found, the conversion is also done (with temporary
+    files).
 
 OPTIONS
     -h      : Show this help information
