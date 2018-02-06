@@ -17,20 +17,24 @@ DESCRIPTION
     If sheet names are specified, only these sheets are extracted.
     Otherwise, only the first sheet or, when the output filename contains
     <SHEET> as placeholder for the sheet name, all sheets are extracted.
-    Sheet names may contain wildcards as in regular expressions, e.g.
+    SheetName may contain wildcards as in regular expressions, e.g.
     "Project.*" will extract all sheets with names starting with 'Project'.
+    
+    Only Libre/OpenOffice spreadsheet files are supported (.ods/.ots/.fods),
+    i.e. files which are (internally) stored in one main XML file.
+    Other file formats which use XML (e.g. .xlsx) separate text and structure.
+    To extract sheets from Excel file formats, they must first be converted
+    to .ods, e.g. with soffice --convert-to ods --headless --norestore ABC.xls
 
 OPTIONS
     -h      : Show this help information
-    
     -v      : Verbose
-    
+    -f      : Convert non-Libre/OpenOffice file to .ods without asking
+              (only if soffice is found)
     -o FILE : Output file (default STDOUT)
               The filename may contain <SHEET> as placeholder for the
               sheet name.
-              
     -S CHAR : Separator (Default horizontal tab)
-    
     -D CHAR : Delimiter (Default '"'). Used when a value contains Separator.
 
 AUTHOR
@@ -42,7 +46,8 @@ my $version="1.0.1";
 # Read Options:
 my $usage="Usage: $^X $0 [-hv] \n\t[-o OUTFILE] \n\t[-S 'SEPARATOR'] "
     ."[-D 'DELIMITER'] \n\tODSFILE [SHEET ...]";
-my $verbose=0; my $test=0; my $target=""; my $sep="\t"; my $del='"';
+my $verbose=0; my $test=0; my $target=""; my $sep="\t"; my $del='"'; 
+my $force=0;
 if ($#ARGV<0 || ($#ARGV==0 && $ARGV[0] eq "")) {
     print $usage,"\nArguments (-h or ? for help): ";
     my $tmp=<STDIN>;
@@ -55,6 +60,7 @@ while ($#ARGV>=0 && (($par=shift) eq "" || substr($par,0,1) eq "-")) {
     next unless $par;
     $verbose++ if $par=~/v/;
     $test=1 if $par=~/t/;
+    $force=1 if $par=~/f/;
     if ($par=~/h/) { print $description,"\n"; exit; }
     if ($par=~/([oSD])/) {
         my $par=$1; my $val=shift;
@@ -74,26 +80,33 @@ die "No spreadsheet file specified\nUse -h for help\n" unless $spreadsheetFile;
 die "File $spreadsheetFile not found\n" if !-e $spreadsheetFile;
 die "No read access to $spreadsheetFile\n" if !-r $spreadsheetFile;
 
-print $0," version ",$version,"\n" if $verbose>0;
+print STDERR $0," version ",$version,"\n" if $verbose>0;
 die "Delimiter and Separator must be different\n" if $del eq $sep;
 
-my $tmpFile="tmp.xml";
+my $tmpName="tmp";
 
 extractSheets($spreadsheetFile,$target,\@ARGV);
 
 sub extractSheets {
     my ($spreadsheetFile,$output,$aSheets) = @_;
     
+    my $zipTypes="ods|ott"; # xOffice files use zip format to store contents
+    my $xmlTypes="fods"; # flat ODF XML spreadsheet
+
     # replacements for &...;
     my %repl; 
         $repl{"amp"}='&'; $repl{"lt"}='<'; $repl{"gt"}='>';
         $repl{"apos"}="'"; $repl{"quot"}='"';
     
     my $XMLfile;
-    if ($spreadsheetFile=~/\.fo.s$/i) # fods/fots? : flat ODF XML spreadsheet
+    if ($spreadsheetFile=~/\.($xmlTypes)$/i) # fods/fots? : 
         { $XMLfile=$spreadsheetFile; }
     else {
-        # xOffice files use zip format to store contents:
+        if ($spreadsheetFile!~/\.($zipTypes)$/i) {
+            # convert2ods exits if soffice exists but an error occurred.
+            $spreadsheetFile=convert2ods($spreadsheetFile); 
+            }
+        # Unzip contents from spreadsheetFile
         use Archive::Zip qw( :ERROR_CODES :CONSTANTS );
         my $zip = Archive::Zip->new();
         if ($zip->read( $spreadsheetFile ) != AZ_OK) {
@@ -102,14 +115,14 @@ sub extractSheets {
                 "Use Libre/OpenOffice to convert to .ods!\n";
             exit;
             }
-        if (-e $tmpFile) { 
-            unlink($tmpFile) 
-            || die "Can't remove $tmpFile (used as temporary file)\n$!\n";
+        if (-e "$tmpName.xml") { 
+            unlink("$tmpName.xml") 
+            || die "Can't remove $tmpName.xml (used as temporary file)\n$!\n";
             }
-        $zip->extractMember("content.xml",$tmpFile);
-        if (!-e $tmpFile) 
+        $zip->extractMember("content.xml","$tmpName.xml");
+        if (!-e "$tmpName.xml") 
             { die "Can't extract content.xml from $spreadsheetFile\n"; }
-        $XMLfile=$tmpFile;
+        $XMLfile="$tmpName.xml";
         }
     
     # Check for XML header and read contents (normallly in 2nd line):
@@ -202,8 +215,46 @@ sub extractSheets {
             $p1=$p3+2;
             }
         }
-     close(OUT);
+    close(OUT);
     
+    sub convert2ods {
+        my ($file) = @_;
+        
+        use File::Copy;
+
+        my $os=$^O; my $soffice;
+        if ($os=~/MSWin/i) # Windows
+            { $soffice=glob('C:\Program\ Files*\*Office*\*\soffice.exe'); }
+        elsif ($os=~/x$|bsd/) # Unix/Linux 
+            { $soffice="/usr/bin/soffice"; }
+        else { $soffice="soffice"; }
+        return $file if $soffice ne "soffice" && !-e $soffice;
+        my $type=($file=~/\.([\w]+)$/ ? $1 : "");
+        copy($file,"$tmpName.$type") 
+            || die "Can't copy $file to $tmpName.$type\n$!\n";
+        $soffice='"'.$soffice.'"' if index($soffice,'"')>=0;
+        my $cmd=$soffice." --convert-to ods $tmpName.$type "
+                ."--headless --norestore";
+        if ($verbose>0 || $force==0) {
+            print STDERR "File type .$type is not supported.\n",
+                "Convert $file to .ods using (on a copy)\n  ",$cmd,"\n",
+                "Libre/OpenOffice must not be running! ";
+            if ($force==0) {
+                print STDERR "(Y/n): ";
+                my $tmp=<STDIN>;
+                exit if !defined($tmp) || $tmp=~/^[nq]/i;
+                }
+            else { print STDERR "\n"; }
+            }
+        if (-e "$tmpName.ods") {
+            unlink("$tmpName.ods") 
+                || die "Can't remove temporary file '$tmpName.ods\n$!\n";
+            }
+        system($cmd);
+        die "$tmpName.ods not created\n" if !-e "$tmpName.ods";
+        return "$tmpName.ods";
+        } # convert2ods
+
     sub takeSheet { 
     # Check wether sheet is wanted, and open output file
         my ($sheetName,$output,$aSheets) = @_;
@@ -211,7 +262,7 @@ sub extractSheets {
         my $res=0;
         for (my $iS=0; $iS<=$#$aSheets; $iS++) {
             my $sheet_=$aSheets->[$iS];
-            if ($sheetName=~/^$sheet_$/) {
+            if ($sheetName=~/^$sheet_$/ || $sheetName eq $sheet_) {
                 print STDERR "* $sheetName matches $sheet_\n" if $test>0;
                 $res=1;
                 last;
